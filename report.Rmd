@@ -1,0 +1,150 @@
+---
+title: Coursera Practical Machine Learning - Final Project Report
+author: "Ayman A. Amin - 18 Septmber 2020"
+output:
+  html_document:
+    fig_height: 9
+    fig_width: 9
+---
+
+### Introduction  
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. 
+
+In this project, we use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website [here](http://groupware.les.inf.puc-rio.br/har). 
+The data consists of a training data and a test data, and the goal is to predict the manner in which the participants did the exercise. The outcome is the “classe” variable in the training set. 
+The dataset used in this project is a courtesy of “Ugulino, W.; Cardador, D.; Vega, K.; Velloso, E.; Milidiu, R.; Fuks, H. Wearable Computing: Accelerometers’ Data Classification of Body Postures and Movements”.
+
+  
+
+### Data Downloading and Preprocessing  
+```{r, cache = F, message=FALSE}
+# required libraries
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(corrplot)
+library(rattle)
+```
+
+First, we download the training and testing datasets from the provided sourse.
+
+```{r, cache = T}
+train_Url <-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+test_Url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+train_File <- "./data/pml-training.csv"
+test_File  <- "./data/pml-testing.csv"
+if (!file.exists("./data")) {
+  dir.create("./data")
+}
+if (!file.exists(train_File)) {
+  download.file(train_Url, destfile=train_File, method="curl")
+}
+if (!file.exists(test_File)) {
+  download.file(test_Url, destfile=test_File, method="curl")
+}
+```  
+
+After downloading the training and testing datasets, we can read them into two data frames.  
+
+```{r, cache = T}
+train_pml <- read.csv("./data/pml-training.csv")
+test_pml <- read.csv("./data/pml-testing.csv")
+dim(train_pml)
+dim(test_pml)
+```
+We can notice that the training dataset is 19,622 observations and 160 variables, while the testing dataset is 20 observations and 160 variables.
+
+
+
+Now, we can clean the two training and testing datasets by simply removing the variables with missing values and those are meaningless.
+
+```{r, cache = T}
+sum(complete.cases(train_pml))
+```
+
+Removing variables with missing values:
+```{r, cache = T}
+train_pml <- train_pml[, colSums(is.na(train_pml)) == 0] 
+test_pml <- test_pml[, colSums(is.na(test_pml)) == 0] 
+```  
+Removing variables that do not contribute much to the accelerometer measurements:
+```{r, cache = T}
+classe <- train_pml$classe
+train_remove <- grepl("^X|timestamp|window", names(train_pml))
+train_pml <- train_pml[, !train_remove]
+train_clean <- train_pml[, sapply(train_pml, is.numeric)]
+train_clean$classe <- classe
+test_remove <- grepl("^X|timestamp|window", names(test_pml))
+test_pml <- test_pml[, !test_remove]
+test_clean <- test_pml[, sapply(test_pml, is.numeric)]
+dim(train_clean)
+dim(test_clean)
+```
+
+After cleaning the datasets, the training set is only 19,622 observations and 53 variables and the testing set is 20 observations and 53 variables. 
+
+
+### Data Modeling
+Since the training dataset is large enough, we split it into two parts:  a pure training set (60%) and a testing set (40%), and the given testing dataset `test_clean` we consider it as a validation set to be used one time at the end of our modeling.   
+
+
+```{r, cache = T}
+set.seed(123) # For reproducibility
+inTrain <- createDataPartition(train_clean$classe, p=0.60, list=F)
+train_set <- train_clean[inTrain, ]
+test_set <- train_clean[-inTrain, ]
+```
+
+Initial exploratory analysis can be done by checking the correlation matricx of the covariates.
+
+```{r, cache = F}
+cor_mat <- cor(train_clean[, -length(names(train_clean))])
+corrplot(cor_mat, order = "FPC", method = "color", type = "upper", 
+         tl.cex = 0.8, tl.col = rgb(0, 0, 0))
+```
+
+It is clear that some of the covariates are correlated.
+
+As the _Random Forest_ algorithm automatically selects important covariates and also it is robust to outliers and correlated covariates. Therefore, in our analysis we use it to build a predictive model for activity recognition, and also we use the cross validation in order to guarantee obtaining an accurate model.   
+
+
+First, we visualize one decision tree, and then run the rnadom forest algorithm.
+
+```{r, cache = F}
+set.seed(123)
+tree_model <- rpart(classe ~ ., data=train_clean, method="class")
+fancyRpartPlot(tree_model)
+```
+
+
+  
+```{r, cache = F}
+control_rf <- trainControl(method="cv", 5)
+model_rf <- train(classe ~ ., data=train_set, method="rf", trControl=control_rf, ntree=25)
+model_rf
+plot(model_rf)
+
+```
+
+We can estimate the performance of the fitted model on the testing dataset.  
+```{r, cache = T}
+predict_rf <- predict(model_rf, test_set)
+confusionMatrix(factor(test_set$classe), predict_rf)
+```
+```{r, cache = T}
+accuracy <- postResample(predict_rf, factor(test_set$classe))
+accuracy
+oose <- 1 - as.numeric(confusionMatrix(factor(test_set$classe), predict_rf)$overall[1])
+oose
+```
+So, the estimated accuracy of the fitted random forest model is about 99% and the estimated out-of-sample error is about 0.97%.
+
+
+#### Original Testing dataset predicion
+
+Finally, we apply the fitted random forest model to the original testing dataset downloaded.  
+```{r, cache = T}
+result <- predict(model_rf, test_clean[, -length(names(test_clean))])
+result
+```  
